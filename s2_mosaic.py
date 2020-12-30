@@ -57,4 +57,4 @@ class s2mosaic:
         del self.toolbar
 
     def s2mosaic(self):
-        processing.execAlgorithmDialog('Mosaic:s2_mosaic', {})
+        processing.execAlgorithmDialog('s2_mosaic:Sentinel2 Mosaic', {})

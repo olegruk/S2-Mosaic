@@ -28,10 +28,10 @@ class mosaicProcessingProvider(QgsProcessingProvider):
         self.addAlgorithm(s2mosaicProcessingAlgorithm())
 
     def id(self):
-        return 'mosaic'
+        return 's2_mosaic'
 
     def name(self):
-        return 'Mosaic'
+        return 's2_mosaic'
 
     def icon(self):
         return QIcon(os.path.dirname(__file__) + '/mosaic-2.png')

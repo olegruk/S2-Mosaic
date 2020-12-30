@@ -13,5 +13,5 @@
 
 
 def classFactory(iface):
-    from .s2-mosaic import s2mosaic
+    from .s2_mosaic import s2mosaic
     return s2mosaic(iface)

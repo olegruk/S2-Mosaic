@@ -25,6 +25,7 @@ from qgis.core import (QgsFeatureSink,
                        QgsProcessingException,
                        QgsProcessingParameterExtent,
                        QgsProcessingParameterEnum,
+                       QgsProcessingParameterDateTime,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterFeatureSink,
                        #QgsProcessingParameterNumber,
@@ -32,147 +33,97 @@ from qgis.core import (QgsFeatureSink,
                        QgsVectorLayer)
 from processing.core.Processing import Processing
 import os.path, math, time
+import ee
+from ee_plugin import Map
 
 
 class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
 
-    FORMAT = 'FORMAT'
+    DATE1 = 'DATE1'
+    DATE2 = 'DATE2'
     EXTENT = 'EXTENT'
-    SCALE = 'SCALE'
     OUTPUT = 'OUTPUT'
 
     def initAlgorithm(self, config=None):
 
-        self.formats = ['A4 portrait',
-                      'A4 landscape',
-                      'A3 portrait',
-                      'A3 landscape',
-                      'A2 portrait',
-                      'A2 landscape',
-                      'A1 portrait',
-                      'A1 landscape',
-                      'A0 portrait',
-                      'A0 landscape']
-
-        self.addParameter(QgsProcessingParameterEnum(self.FORMAT, 'Atlas format', self.formats, defaultValue=self.formats[0]))
-        self.addParameter(QgsProcessingParameterScale(self.SCALE, 'Map scale', defaultValue=25000))
-        #self.addParameter(QgsProcessingParameterNumber(self.SCALE, 'Grid Scale:', defaultValue=250, optional=False, minValue=0, maxValue=10000))
-        self.addParameter(QgsProcessingParameterExtent(self.EXTENT, 'Atlas extent'))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Atlas Grid', type=QgsProcessing.TypeVectorPolygon))
+        self.addParameter(QgsProcessingParameterDateTime(self.DATE1, 'Left date'))
+        self.addParameter(QgsProcessingParameterDateTime(self.DATE2, 'Right date'))
+        self.addParameter(QgsProcessingParameterExtent(self.EXTENT, 'Mosaic extent'))
+        self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Result mosaic', type=QgsProcessing.TypeVectorPolygon))
        
     def processAlgorithm(self, parameters, context, feedback):
 
         crs = context.project().crs()
-        fmt = self.parameterAsEnum(parameters, self.FORMAT, context)
+        #fmt = self.parameterAsEnum(parameters, self.FORMAT, context)
         #scale = self.parameterAsInt(parameters, self.SCALE, context)
-        scale = int(self.parameterAsDouble(parameters, self.SCALE, context)/100)
+        #scale = int(self.parameterAsDouble(parameters, self.SCALE, context)/100)
         bbox = self.parameterAsExtent(parameters, self.EXTENT, context, crs)
-        grid_Wkb = QgsWkbTypes.Polygon
 
-        page_h, page_v = self._decode_fmt(fmt, scale)
+        date_start='2020-08-01'
+        date_end='2020-08-31'
 
-        uri_str = "Polygon?crs=" + crs.authid() + "&field=page_h:int&field=page_v:int&field=scale:int"
-        atlas_layer = QgsVectorLayer(uri_str, "atlas_layer", "memory")
-        atlas_provider = atlas_layer.dataProvider()
-        
-        self._rectangleGrid(atlas_provider, bbox, page_h, page_v, scale, feedback)
-        
-        fields = atlas_layer.fields()
-        (sink, dest_id) = self.parameterAsSink(parameters, self.OUTPUT, context, fields, grid_Wkb, crs)
-        if sink is None:
-            raise QgsProcessingException(self.invalidSinkError(parameters, self.OUTPUT))
+        #Выбираем область (можно рисовать в code.earthengine.google.com)и вставлять сюда
+        aoi=ee.FeatureCollection(ee.Geometry.Polygon(
+                [[[29, 57],
+                  [29, 55],
+                  [38, 55],
+                  [38, 57]]]))
 
-        features = atlas_layer.getFeatures()
-        total = 100.0 / atlas_layer.featureCount() if atlas_layer.featureCount() else 0
-        for current, f in enumerate(features):
-            if feedback.isCanceled():
-                break
-            sink.addFeature(f, QgsFeatureSink.FastInsert)
-            feedback.setProgress(int(current * total))
-        
-        return {self.OUTPUT: dest_id}
+        cloudiness = 50
+        #Параметры визуализации
+        r_band = 'B12'
+        g_band = 'B8'
+        b_band = 'B4'
+        bands = [r_band,g_band,b_band]
+        vis_min = 30
+        vis_max = 7000.
+        vis_gamma = 1.7
+        visParams = {'bands': bands,'min': vis_min,'max': vis_max,'gamma': vis_gamma}
+        layer_name_1 = 'S2SRC-%s-%s'%(date_start,date_end)
+        layer_name_2 = 'Sent-2-%s-%s-stretch'%(date_start,date_end)
+        #Выбираем коллекцию снимков  и фильтруем по общей облачности
+        collection = ee.ImageCollection('COPERNICUS/S2').filterMetadata('CLOUDY_PIXEL_PERCENTAGE','less_than', cloudiness).filterBounds(aoi).map(self.filterCloudSentinel2)
+        #Напечаем размер коллекции в консоли
+        col_size = collection.size().getInfo()
+        #Создадим медианный композит и обрежем по аои
+        im1 = collection.filterDate(date_start,date_end).median().clipToCollection(aoi)
+        #добавим на карту
+        Map.addLayer(im1,visParams,layer_name_1,False)
+        #Парметры каналы, исходное изображение, АОИ, шкала (чем больше тем быстрее),перцентили)
+        s2str=self.stretcher(bands,im1.updateMask(im1.gt(0)),aoi,1500,3,97)
+        #извлекаем rgb и определяем его как image
+        im2 = ee.Image(s2str.get('imRGB')).clipToCollection(aoi)
+        #добавим на карту
+        Map.addLayer(im2,{},layer_name_2,False)
+
+        return {self.OUTPUT: col_size}
      
-    def _rectangleGrid(self, sink, bbox, page_h, page_v, scale, feedback):
-        feat = QgsFeature()
+    def stretcher(self, bands,im,AOI,scale,range1,range2):
+        stats = im.select(bands).clipToCollection(AOI).reduceRegion(
+        reducer=ee.Reducer.percentile([range1,range2]),
+        geometry=AOI,
+        scale=scale,
+        maxPixels= 1e15)
+        imRGB = im.select(bands).visualize(
+           min=ee.List([stats.get(bands[0]+'_p'+str(range1)), stats.get(bands[1]+'_p'+str(range1)), stats.get(bands[2]+'_p'+str(range1))]), 
+           max=ee.List([stats.get(bands[0]+'_p'+str(range2)), stats.get(bands[1]+'_p'+str(range2)), stats.get(bands[2]+'_p'+str(range2))]), 
+        )
+        return im.set('imRGB', imRGB)#Добавляем rgb к исходным каналам в виде метаданных
 
-        hSpacing = (page_h-20)*scale/10
-        vSpacing = (page_v-20)*scale/10
-
-        columns = int(math.ceil(float(bbox.width()) / hSpacing))
-        rows = int(math.ceil(float(bbox.height()) / vSpacing))
-
-        cells = rows * columns
-        count_update = cells * 0.05
-
-        id = 1
-        count = 0
-
-        for col in range(columns):
-            if feedback.isCanceled():
-                break
-
-            x1 = bbox.xMinimum() + (col * hSpacing)
-            x2 = x1 + hSpacing
-
-            for row in range(rows):
-                y1 = bbox.yMaximum() - (row * vSpacing)
-                y2 = y1 - vSpacing
-
-                polyline = []
-                polyline.append(QgsPointXY(x1, y1))
-                polyline.append(QgsPointXY(x2, y1))
-                polyline.append(QgsPointXY(x2, y2))
-                polyline.append(QgsPointXY(x1, y2))
-                polyline.append(QgsPointXY(x1, y1))
-
-                feat.setGeometry(QgsGeometry.fromPolygonXY([polyline]))
-                feat.setAttributes([int(page_h), int(page_v), int(scale)])
-                sink.addFeature(feat, QgsFeatureSink.FastInsert)
-
-                id += 1
-                count += 1
-                if int(math.fmod(count, count_update)) == 0:
-                    feedback.setProgress(int(count / cells * 100))
-
-    def _decode_fmt(self, fmt, scale):
-        if fmt == 0: #A4 portrait
-            page_h = 210
-            page_v = 297
-        elif fmt == 1: #A4 landscape
-            page_h = 297
-            page_v = 210
-        elif fmt == 2: #A3 portrait
-            page_h = 297
-            page_v = 420
-        elif fmt == 3: #A3 landscape
-            page_h = 420
-            page_v = 297
-        elif fmt == 4: #A2 portrait
-            page_h = 420
-            page_v = 594
-        elif fmt == 5: #A2 landscape
-            page_h = 594
-            page_v = 420
-        elif fmt == 6: #A1 portrait
-            page_h = 594
-            page_v = 841
-        elif fmt == 7: #A1 landscape
-            page_h = 841
-            page_v = 594
-        elif fmt == 8: #A0 portrait
-            page_h = 841
-            page_v = 1189
-        elif fmt == 9: #A0 landscape
-            page_h = 1189
-            page_v = 841
-
-        return page_h, page_v
+    def filterCloudSentinel2 (self, img): 
+        quality = img.select('QA60').int()
+        cloudBit = ee.Number(1024)
+        cirrusBit = ee.Number(2048)
+        cloudFree = quality.bitwiseAnd(cloudBit).eq(0)
+        cirrusFree = quality.bitwiseAnd(cirrusBit).eq(0)
+        clear = cloudFree.bitwiseAnd(cirrusFree)
+        return img.updateMask(clear)
 
     def name(self):
-        return 'Atlas grid'
+        return 'Sentinel2 Mosaic'
 
     def icon(self):
-        return QIcon(os.path.dirname(__file__) + '/grid.png')
+        return QIcon(os.path.dirname(__file__) + '/mosaic-2.png')
 
     def displayName(self):
         return self.name()
@@ -184,4 +135,4 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         return ''
 
     def createInstance(self):
-        return AtlasGridProcessingAlgorithm()
+        return s2mosaicProcessingAlgorithm()
