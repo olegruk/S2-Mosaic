@@ -14,27 +14,37 @@
  *                                                                         *
  ***************************************************************************/
 """
+from qgis.utils import iface
 
 from qgis.PyQt.QtGui import QIcon
-from qgis.core import (QgsFeatureSink,
+from qgis.core import (QgsProject,
+                       QgsFeatureSink,
+                       QgsRasterLayer,
                        QgsFeature,
                        QgsGeometry,
                        QgsPointXY,
                        QgsWkbTypes,
+                       QgsRectangle,
                        QgsProcessing,
                        QgsProcessingException,
                        QgsProcessingParameterExtent,
                        QgsProcessingParameterEnum,
+                       QgsProcessingParameterNumber,
+                       QgsProcessingParameterBoolean,
                        QgsProcessingParameterDateTime,
                        QgsProcessingAlgorithm,
                        QgsProcessingParameterFeatureSink,
                        #QgsProcessingParameterNumber,
                        QgsProcessingParameterScale,
-                       QgsVectorLayer)
+                       QgsVectorLayer,
+                       QgsLayerTreeLayer,
+                       QgsCoordinateReferenceSystem)
 from processing.core.Processing import Processing
-import os.path, math, time
+import os.path, json
 import ee
-from ee_plugin import Map
+#from ee_plugin import Map
+import pyproj
+
 
 
 class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
@@ -43,44 +53,66 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
     DATE2 = 'DATE2'
     EXTENT = 'EXTENT'
     OUTPUT = 'OUTPUT'
-
+    INTERVAL = 'INTERVAL'
+    BAND1 = 'BAND1'
+    BAND2 = 'BAND2'
+    BAND3 = 'BAND3'
+    CLOUD = 'CLOUD'
+    VIS_MIN = 'VIS_MIN'
+    VIS_MAX = 'VIS_MAX'
+    VIS_GAMMA = 'VIS_GAMMA'
+    VISIBLE = 'VISIBLE'
     def initAlgorithm(self, config=None):
 
-        self.addParameter(QgsProcessingParameterDateTime(self.DATE1, 'Left date'))
-        self.addParameter(QgsProcessingParameterDateTime(self.DATE2, 'Right date'))
+        self.bandlist = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B8A', 'B9', 'B10', 'B11', 'B12']
         self.addParameter(QgsProcessingParameterExtent(self.EXTENT, 'Mosaic extent'))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Result mosaic', type=QgsProcessing.TypeVectorPolygon))
+        self.addParameter(QgsProcessingParameterDateTime(self.DATE1, 'Date:'))
+        self.addParameter(QgsProcessingParameterNumber(self.INTERVAL, 'Interval:', defaultValue=7, optional=False, minValue=1, maxValue=31))
+        self.addParameter(QgsProcessingParameterEnum(self.BAND1, 'Band1 (red):', self.bandlist, defaultValue=12))
+        self.addParameter(QgsProcessingParameterEnum(self.BAND2, 'Band2 (green):', self.bandlist, defaultValue=7))
+        self.addParameter(QgsProcessingParameterEnum(self.BAND3, 'Band3 (blue):', self.bandlist, defaultValue=3))
+        self.addParameter(QgsProcessingParameterNumber(self.CLOUD, 'Cloudness:', defaultValue=50, optional=False, minValue=0, maxValue=100))
+        self.addParameter(QgsProcessingParameterNumber(self.VIS_MIN, 'Vis_min:', defaultValue=30, optional=False, minValue=0, maxValue=10000))
+        self.addParameter(QgsProcessingParameterNumber(self.VIS_MAX, 'Vis_max:', defaultValue=7000, optional=False, minValue=0, maxValue=10000))
+        self.addParameter(QgsProcessingParameterBoolean(self.VISIBLE, 'Is visible:', defaultValue=False, optional=False))
+
+        #self.addParameter(QgsProcessingParameterNumber(self.VIS_GAMMA, 'Vis_gamma:', defaultValue=1.7, optional=False, minValue=0, maxValue=10))
+#        self.addParameter(QgsProcessingParameterDateTime(self.DATE2, 'Right date'))
+#        self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Result mosaic', type=QgsProcessing.TypeVectorPolygon))
        
     def processAlgorithm(self, parameters, context, feedback):
+        Processing.initialize()
+        import processing
+
+        #fmt = self.parameterAsEnum(parameters, self.FORMAT, context)
+        #scale = int(self.parameterAsDouble(parameters, self.SCALE, context)/100)
 
         crs = context.project().crs()
-        #fmt = self.parameterAsEnum(parameters, self.FORMAT, context)
-        #scale = self.parameterAsInt(parameters, self.SCALE, context)
-        #scale = int(self.parameterAsDouble(parameters, self.SCALE, context)/100)
+        final_crs = QgsCoordinateReferenceSystem("EPSG:4326")
         bbox = self.parameterAsExtent(parameters, self.EXTENT, context, crs)
+        final_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+        bbox_prj = self.bbox_for_ee_collection(bbox, crs, final_crs)
+        aoi=ee.FeatureCollection(ee.Geometry.Polygon(bbox_prj))
 
-        date_start='2020-08-01'
-        date_end='2020-08-31'
+        interval = self.parameterAsInt(parameters, self.INTERVAL, context)
+        date1 = self.parameterAsDateTime(parameters, self.DATE1, context)
+        date_end = date1.toString("yyyy-MM-dd")
+        date_start = date1.addDays(-interval).toString("yyyy-MM-dd")
 
-        #Выбираем область (можно рисовать в code.earthengine.google.com)и вставлять сюда
-        aoi=ee.FeatureCollection(ee.Geometry.Polygon(
-                [[[29, 57],
-                  [29, 55],
-                  [38, 55],
-                  [38, 57]]]))
-
-        cloudiness = 50
         #Параметры визуализации
-        r_band = 'B12'
-        g_band = 'B8'
-        b_band = 'B4'
+        cloudiness = self.parameterAsInt(parameters, self.CLOUD, context)
+        r_band = self.bandlist[self.parameterAsEnum(parameters, self.BAND1, context)]
+        g_band = self.bandlist[self.parameterAsEnum(parameters, self.BAND2, context)]
+        b_band = self.bandlist[self.parameterAsEnum(parameters, self.BAND3, context)]
         bands = [r_band,g_band,b_band]
-        vis_min = 30
-        vis_max = 7000.
+        vis_min = self.parameterAsInt(parameters, self.VIS_MIN, context)
+        vis_max = self.parameterAsInt(parameters, self.VIS_MAX, context)
+        #vis_gamma = self.parameterAsDouble(parameters, self.VIS_GAMMA, context)
         vis_gamma = 1.7
         visParams = {'bands': bands,'min': vis_min,'max': vis_max,'gamma': vis_gamma}
+        is_visible = self.parameterAsBoolean(parameters, self.VISIBLE, context)
         layer_name_1 = 'S2SRC-%s-%s'%(date_start,date_end)
-        layer_name_2 = 'Sent-2-%s-%s-stretch'%(date_start,date_end)
+
         #Выбираем коллекцию снимков  и фильтруем по общей облачности
         collection = ee.ImageCollection('COPERNICUS/S2').filterMetadata('CLOUDY_PIXEL_PERCENTAGE','less_than', cloudiness).filterBounds(aoi).map(self.filterCloudSentinel2)
         #Напечаем размер коллекции в консоли
@@ -88,16 +120,43 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         #Создадим медианный композит и обрежем по аои
         im1 = collection.filterDate(date_start,date_end).median().clipToCollection(aoi)
         #добавим на карту
-        Map.addLayer(im1,visParams,layer_name_1,False)
-        #Парметры каналы, исходное изображение, АОИ, шкала (чем больше тем быстрее),перцентили)
-        s2str=self.stretcher(bands,im1.updateMask(im1.gt(0)),aoi,1500,3,97)
-        #извлекаем rgb и определяем его как image
-        im2 = ee.Image(s2str.get('imRGB')).clipToCollection(aoi)
-        #добавим на карту
-        Map.addLayer(im2,{},layer_name_2,False)
+        self.addLayer(im1,visParams,layer_name_1,is_visible)
+#        layer = QgsRasterLayer(url, layer_name_1, "wms")
+        #self.update_ee_layer_properties(layer, image, shown, opacity)
+#        QgsProject.instance().addMapLayer(layer)
+#        root = QgsProject.instance().layerTreeRoot()
+#        root.insertChildNode(0, QgsLayerTreeLayer(layer))
+#        layer_list = root.checkedLayers()
 
-        return {self.OUTPUT: col_size}
+#        #Парметры каналы, исходное изображение, АОИ, шкала (чем больше тем быстрее),перцентили)
+#        layer_name_2 = 'Sent-2-%s-%s-stretch'%(date_start,date_end)
+#        s2str=self.stretcher(bands,im1.updateMask(im1.gt(0)),aoi,1500,3,97)
+#        #извлекаем rgb и определяем его как image
+#        im2 = ee.Image(s2str.get('imRGB')).clipToCollection(aoi)
+#        #добавим на карту
+#        url, layer_list = self.addLayer(im2,{},layer_name_2,False)
+#        layer = QgsRasterLayer(url, layer_name_2, "wms")
+#        #self.update_ee_layer_properties(layer, image, shown, opacity)
+#        QgsProject.instance().addMapLayer(layer)
+#        root = QgsProject.instance().layerTreeRoot()
+#        root.insertChildNode(0, QgsLayerTreeLayer(layer))
+#        layer_list = root.checkedLayers()
+
+        return {self.OUTPUT: [date_start, date_end, col_size]}
      
+    def bbox_for_ee_collection(self, bbox, in_crs, out_crs):
+    
+        proj_in = pyproj.Proj(init=in_crs.authid())
+        proj_out = pyproj.Proj(init=out_crs.authid())
+        xmin, ymin = pyproj.transform(proj_in, proj_out, bbox.xMinimum(), bbox.yMinimum())
+        xmax, ymax = pyproj.transform(proj_in, proj_out, bbox.xMaximum(), bbox.yMaximum())
+        bbox_reproj = [[[xmin, ymax],
+                        [xmin, ymin],
+                        [xmax, ymin],
+                        [xmax, ymax]]]
+
+        return bbox_reproj
+
     def stretcher(self, bands,im,AOI,scale,range1,range2):
         stats = im.select(bands).clipToCollection(AOI).reduceRegion(
         reducer=ee.Reducer.percentile([range1,range2]),
@@ -105,8 +164,8 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         scale=scale,
         maxPixels= 1e15)
         imRGB = im.select(bands).visualize(
-           min=ee.List([stats.get(bands[0]+'_p'+str(range1)), stats.get(bands[1]+'_p'+str(range1)), stats.get(bands[2]+'_p'+str(range1))]), 
-           max=ee.List([stats.get(bands[0]+'_p'+str(range2)), stats.get(bands[1]+'_p'+str(range2)), stats.get(bands[2]+'_p'+str(range2))]), 
+        min=ee.List([stats.get(bands[0]+'_p'+str(range1)), stats.get(bands[1]+'_p'+str(range1)), stats.get(bands[2]+'_p'+str(range1))]), 
+        max=ee.List([stats.get(bands[0]+'_p'+str(range2)), stats.get(bands[1]+'_p'+str(range2)), stats.get(bands[2]+'_p'+str(range2))]), 
         )
         return im.set('imRGB', imRGB)#Добавляем rgb к исходным каналам в виде метаданных
 
@@ -136,3 +195,113 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
 
     def createInstance(self):
         return s2mosaicProcessingAlgorithm()
+
+    def addLayer(self, image: ee.Image, visParams=None, name=None, shown=True, opacity=1.0):
+        """
+            Adds a given EE object to the map as a layer.
+            https://developers.google.com/earth-engine/api_docs#map.addlayer
+        """
+
+        if not isinstance(image, ee.Image) and not isinstance(image, ee.FeatureCollection) and not isinstance(image, ee.Feature) and not isinstance(image, ee.Geometry):
+            err_str = "\n\nThe image argument in 'addLayer' function must be an instace of one of ee.Image, ee.Geometry, ee.Feature or ee.FeatureCollection."
+            raise AttributeError(err_str)
+
+        if isinstance(image, ee.Geometry) or isinstance(image, ee.Feature) or isinstance(image, ee.FeatureCollection):
+            features = ee.FeatureCollection(image)
+
+            color = '000000'
+
+            if visParams and 'color' in visParams:
+                color = visParams['color']
+
+            image = features.style(**{'color': color})
+
+        else:
+            if isinstance(image, ee.Image) and visParams:
+                image = image.visualize(**visParams)
+
+        if name is None:
+            # extract name from id
+            try:
+                name = json.loads(image.id().serialize())[
+                    "scope"][0][1]["arguments"]["id"]
+            except:
+                name = "untitled"
+
+        url, layer_list = self.add_or_update_ee_image_layer(image, name, shown, opacity)
+        return url, layer_list
+
+    def get_ee_image_url(self, image):
+        map_id = ee.data.getMapId({'image': image})
+        url = map_id['tile_fetcher'].url_format
+        return url
+
+
+    def update_ee_layer_properties(self, layer, image, shown, opacity):
+        layer.setCustomProperty('ee-layer', True)
+
+        if not (opacity is None):
+            layer.renderer().setOpacity(opacity)
+
+        # serialize EE code
+        ee_script = image.serialize()
+        layer.setCustomProperty('ee-script', ee_script)
+
+
+    def add_ee_image_layer(self, image, name, shown, opacity):
+        #check_version()
+
+        url = "type=xyz&url=" + self.get_ee_image_url(image)
+        layer = QgsRasterLayer(url, name, "wms")
+        self.update_ee_layer_properties(layer, image, shown, opacity)
+        QgsProject.instance().addMapLayer(layer)
+        root = QgsProject.instance().layerTreeRoot()
+        root.insertChildNode(0, QgsLayerTreeLayer(layer))
+        layer_list = root.checkedLayers()
+
+        if not (shown is None):
+            QgsProject.instance().layerTreeRoot().findLayer(
+                layer.id()).setItemVisibilityChecked(shown)
+        return url, layer_list
+
+
+    def update_ee_image_layer(self, image, layer, shown=True, opacity=1.0):
+        #check_version()
+
+        url = "type=xyz&url=" + self.get_ee_image_url(image)
+        layer.dataProvider().setDataSourceUri(url)
+        layer.dataProvider().reloadData()
+        self.update_ee_layer_properties(layer, image, shown, opacity)
+        layer.triggerRepaint()
+        layer.reload()
+#        iface.mapCanvas().refresh()
+
+#        item = QgsProject.instance().layerTreeRoot().findLayer(layer.id())
+#        if not (shown is None):
+#            item.setItemVisibilityChecked(shown)
+
+        return url, []
+
+
+    def get_layer_by_name(self, name):
+        layers = QgsProject.instance().mapLayers().values()
+
+        for l in layers:
+            if l.name() == name:
+                return l
+
+        return None
+
+
+    def add_or_update_ee_image_layer(self, image, name, shown=True, opacity=1.0):
+        layer = self.get_layer_by_name(name)
+
+        if layer:
+            if not layer.customProperty('ee-layer'):
+                raise Exception('Layer is not an EE layer: ' + name)
+
+            url, layer_list = self.update_ee_image_layer(image, layer, shown, opacity)
+        else:
+            url, layer_list = self.add_ee_image_layer(image, name, shown, opacity)
+        
+        return url, layer_list
