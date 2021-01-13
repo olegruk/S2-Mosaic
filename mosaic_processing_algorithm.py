@@ -14,8 +14,6 @@ MosaicProcessingAlgorithm
  *                                                                         *
  ***************************************************************************/
 """
-#from qgis.utils import iface
-
 from qgis.PyQt.QtGui import QIcon
 from qgis.core import (QgsProject,
                        QgsRasterLayer,
@@ -183,6 +181,8 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         layer.setCustomProperty('ee-layer', True)
         if not (opacity is None):
             layer.renderer().setOpacity(opacity)
+        layer.brightnessFilter().setContrast(25)
+
         # serialize EE code
         ee_script = image.serialize()
         layer.setCustomProperty('ee-script', ee_script)
@@ -196,8 +196,7 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         root.insertChildNode(0, QgsLayerTreeLayer(layer))
 #        layer_list = root.checkedLayers()
         if not (shown is None):
-            QgsProject.instance().layerTreeRoot().findLayer(
-                layer.id()).setItemVisibilityChecked(shown)
+            root.findLayer(layer.id()).setItemVisibilityChecked(shown)
 
     def update_ee_image_layer(self, image, layer, shown=True, opacity=1.0):
         url = "type=xyz&url=" + self.get_ee_image_url(image)
@@ -206,7 +205,6 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         self.update_ee_layer_properties(layer, image, opacity)
         layer.triggerRepaint()
         layer.reload()
-#        iface.mapCanvas().refresh()
         if not (shown is None):
             QgsProject.instance().layerTreeRoot().findLayer(
                 layer.id()).setItemVisibilityChecked(shown)
