@@ -41,7 +41,7 @@ class s2mosaic:
         self.s2mosaicAction.setEnabled(True)
         #self.iface.addToolBarIcon(self.s2mosaicAction)
         self.toolbar.addAction(self.s2mosaicAction)
-        self.iface.addPluginToVectorMenu('&Mosaic', self.s2mosaicAction)
+        self.iface.addPluginToRasterMenu('&Mosaic', self.s2mosaicAction)
  
         self.initProcessing()
         self.first_start = True
@@ -51,7 +51,7 @@ class s2mosaic:
         QgsApplication.processingRegistry().addProvider(self.provider)
 
     def unload(self):
-        self.iface.removePluginVectorMenu('&Mosaic', self.s2mosaicAction)
+        self.iface.removePluginRasterMenu('&Mosaic', self.s2mosaicAction)
         self.iface.removeToolBarIcon(self.s2mosaicAction)
         QgsApplication.processingRegistry().removeProvider(self.provider)
         del self.toolbar
