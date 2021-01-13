@@ -34,7 +34,7 @@ class s2mosaic:
 
     def initGui(self):
     
-        iconS2mosaic = QIcon(os.path.dirname(__file__) + '/mosaic-1.png')
+        iconS2mosaic = QIcon(os.path.dirname(__file__) + '/mosaic-2.png')
         self.s2mosaicAction = QAction(iconS2mosaic, "s2_mosaic", self.iface.mainWindow())
         self.s2mosaicAction.setObjectName("s2mocaic")
         self.s2mosaicAction.triggered.connect(self.s2mosaic)

@@ -25,8 +25,8 @@ hasProcessingProvider=yes
 #tags=python
 
 #homepage=http://homepage
-category=Vector
-icon=mosaic-1.png
+category=Raster
+icon=mosaic-2.png
 # experimental flag
 experimental=True
 
