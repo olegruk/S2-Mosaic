@@ -1,5 +1,5 @@
 <RCC>
     <qresource prefix="/plugins/s2-mosaic" >
-        <file>mosaic-1.png</file>
+        <file>mosaic-2.png</file>
     </qresource>
 </RCC>

@@ -49,9 +49,9 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
 
         self.bandlist = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B8A', 'B9', 'B10', 'B11', 'B12']
-        self.addParameter(QgsProcessingParameterExtent(self.EXTENT, 'Mosaic extent'))
-        self.addParameter(QgsProcessingParameterDateTime(self.DATE1, 'Date:'))
-        self.addParameter(QgsProcessingParameterNumber(self.INTERVAL, 'Interval:', defaultValue=7, optional=False, minValue=1, maxValue=31))
+        self.addParameter(QgsProcessingParameterExtent(self.EXTENT, 'Mosaic extent:'))
+        self.addParameter(QgsProcessingParameterDateTime(self.DATE1, 'Date (last date for mosaic):'))
+        self.addParameter(QgsProcessingParameterNumber(self.INTERVAL, 'Interval (days before "Date"):', defaultValue=7, optional=False, minValue=1, maxValue=31))
         self.addParameter(QgsProcessingParameterEnum(self.BAND1, 'Band1 (red):', self.bandlist, defaultValue=12))
         self.addParameter(QgsProcessingParameterEnum(self.BAND2, 'Band2 (green):', self.bandlist, defaultValue=7))
         self.addParameter(QgsProcessingParameterEnum(self.BAND3, 'Band3 (blue):', self.bandlist, defaultValue=3))
