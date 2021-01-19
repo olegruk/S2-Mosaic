@@ -39,6 +39,7 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
     BAND1 = 'BAND1'
     BAND2 = 'BAND2'
     BAND3 = 'BAND3'
+    CLOUDFILTER = 'CLOUDFILTER'
     CLOUD = 'CLOUD'
     VIS_MIN = 'VIS_MIN'
     VIS_MAX = 'VIS_MAX'
@@ -55,10 +56,11 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterEnum(self.BAND1, 'Band1 (red):', self.bandlist, defaultValue=12))
         self.addParameter(QgsProcessingParameterEnum(self.BAND2, 'Band2 (green):', self.bandlist, defaultValue=7))
         self.addParameter(QgsProcessingParameterEnum(self.BAND3, 'Band3 (blue):', self.bandlist, defaultValue=3))
+        self.addParameter(QgsProcessingParameterBoolean(self.CLOUDFILTER, 'Cloud filter:', defaultValue=True, optional=False))
         self.addParameter(QgsProcessingParameterNumber(self.CLOUD, 'Cloudness:', defaultValue=50, optional=False, minValue=0, maxValue=100))
         self.addParameter(QgsProcessingParameterNumber(self.VIS_MIN, 'Vis_min:', defaultValue=30, optional=False, minValue=0, maxValue=10000))
         self.addParameter(QgsProcessingParameterNumber(self.VIS_MAX, 'Vis_max:', defaultValue=7000, optional=False, minValue=0, maxValue=10000))
-        self.addParameter(QgsProcessingParameterBoolean(self.VISIBLE, 'Is visible:', defaultValue=False, optional=False))
+        self.addParameter(QgsProcessingParameterBoolean(self.VISIBLE, 'Is visible:', defaultValue=True, optional=False))
 #        self.addParameter(QgsProcessingParameterNumber(self.VIS_GAMMA, 'Vis_gamma:', defaultValue=1.7, optional=False, minValue=0, maxValue=10))
 #        self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, 'Result mosaic', type=QgsProcessing.TypeVectorPolygon))
        
@@ -95,7 +97,11 @@ class s2mosaicProcessingAlgorithm(QgsProcessingAlgorithm):
         layer_name_1 = 'S2SRC-%s-%s'%(date_start,date_end)
 
         #Выбираем коллекцию снимков  и фильтруем по общей облачности
-        collection = ee.ImageCollection('COPERNICUS/S2').filterMetadata('CLOUDY_PIXEL_PERCENTAGE','less_than', cloudiness).filterBounds(aoi).map(self.filterCloudSentinel2)
+        cloud_filter = self.parameterAsBoolean(parameters, self.CLOUDFILTER, context)
+        if cloud_filter:
+            collection = ee.ImageCollection('COPERNICUS/S2').filterMetadata('CLOUDY_PIXEL_PERCENTAGE','not_greater_than', cloudiness).filterBounds(aoi).map(self.filterCloudSentinel2)
+        else:
+            collection = ee.ImageCollection('COPERNICUS/S2').filterMetadata('CLOUDY_PIXEL_PERCENTAGE','not_greater_than', cloudiness).filterBounds(aoi)
         #Определяем размер коллекции
         col_size = collection.size().getInfo()
         #Создадим медианный композит и обрежем по аои
